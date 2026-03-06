@@ -21,12 +21,12 @@ public class merge_sort implements sorting_strategy  {
             steps.add(new visualization_element(Arrays.copyOfRange(arr, 0, array.length),first+p1,mid+1+p2,true));
             if (array[first+p1] <= array[mid+1+p2]) {
                 arr[k] = array[first+p1];
-                steps.add(new visualization_element(Arrays.copyOfRange(arr, 0, array.length),first+p1,-1,false));
+                steps.add(new visualization_element(Arrays.copyOfRange(arr, 0, array.length),first+p1,k,false));
                 p1++;
                 k++;
             } else {
                 arr[k] = array[mid+1+p2];
-                steps.add(new visualization_element(Arrays.copyOfRange(arr, 0, array.length),mid+1+p2,-1,false));
+                steps.add(new visualization_element(Arrays.copyOfRange(arr, 0, array.length),mid+1+p2,k,false));
                 p2++;
                 k++;
             }
@@ -34,14 +34,14 @@ public class merge_sort implements sorting_strategy  {
 
         while (p1 < size1) {
             arr[k] = array[first+p1];
-            steps.add(new visualization_element(Arrays.copyOfRange(arr, 0, array.length),first+p1,-1,false));
+            steps.add(new visualization_element(Arrays.copyOfRange(arr, 0, array.length),first+p1,k,false));
             p1++;
             k++;
         }
 
         while (p2 < size2) {
             arr[k] = array[mid+1+p2];
-            steps.add(new visualization_element(Arrays.copyOfRange(arr, 0, array.length),mid+1+p2,-1,false));
+            steps.add(new visualization_element(Arrays.copyOfRange(arr, 0, array.length),mid+1+p2,k,false));
             p2++;
             k++;
         }
