@@ -1,6 +1,7 @@
 import javafx.animation.KeyFrame;
 import javafx.animation.Timeline;
 import javafx.collections.ObservableList;
+import javafx.concurrent.Task;
 import javafx.fxml.FXML;
 import javafx.geometry.Pos;
 import javafx.scene.control.*;
@@ -51,6 +52,8 @@ public class visualization_controller {
     Label interchanges;
     @FXML
     Label comparisons;
+    @FXML
+    CheckBox box;
 
     long comparison = 0;
     long interchange = 0;
@@ -91,7 +94,6 @@ public class visualization_controller {
         speed.valueProperty().addListener((observable, oldValue, newValue) -> {
             Speed_label.setText("Delay: " + newValue.intValue() + "ms");
         });
-
         interchanges.setText(interchange + " ");
         comparisons.setText(comparison + " ");
     }
@@ -206,7 +208,7 @@ public class visualization_controller {
 
     @FXML
     public void run_button() throws InterruptedException {
-        sorting_strategy s = factory.getstrategy(sorting_type.getValue(), true);
+        sorting_strategy s = factory.getstrategy(sorting_type.getValue(), box.isSelected());
         s.sort(steps.getFirst().getArray(), steps);
         AtomicInteger i = new AtomicInteger(1);
 
@@ -292,7 +294,7 @@ public class visualization_controller {
             return;
         }
 
-        // --- Setup table columns ---
+        // Setup columns once on UI thread
         ObservableList<TableColumn<ComparisonResult, ?>> cols = table.getColumns();
         ((TableColumn<ComparisonResult, String>)  cols.get(0)).setCellValueFactory(new PropertyValueFactory<>("algorithmName"));
         ((TableColumn<ComparisonResult, Integer>) cols.get(1)).setCellValueFactory(new PropertyValueFactory<>("arraySize"));
@@ -304,131 +306,156 @@ public class visualization_controller {
         ((TableColumn<ComparisonResult, Long>)    cols.get(7)).setCellValueFactory(new PropertyValueFactory<>("comparisons"));
         ((TableColumn<ComparisonResult, Long>)    cols.get(8)).setCellValueFactory(new PropertyValueFactory<>("interchanges"));
 
-        javafx.collections.ObservableList<ComparisonResult> results =
-                javafx.collections.FXCollections.observableArrayList();
-
         int totalPoints = points.getValue();
         int minSz       = min_size.getValue();
         int maxSz       = max_size.getValue();
         int runs        = run_numbers.getValue();
 
-        String[] modes    = {"Random", "Sorted", "Reverse Sorted"};
-        int pointsPerMode = totalPoints / modes.length;
-        int remainder     = totalPoints % modes.length;
+        // Snapshot imported data before background thread
+        int[][] importedSnapshot     = importedArrays;
+        List<String> namesSnapshot   = new ArrayList<>(importedFileNames);
 
-        // --- Generated arrays block ---
-        for (int m = 0; m < modes.length; m++) {
-            String mode    = modes[m];
-            int modePoints = pointsPerMode + (m < remainder ? 1 : 0);
+        Task<ObservableList<ComparisonResult>> task = new Task<>() {
+            @Override
+            protected javafx.collections.ObservableList<ComparisonResult> call() {
+                javafx.collections.ObservableList<ComparisonResult> results =
+                        javafx.collections.FXCollections.observableArrayList();
 
-            for (int pt = 0; pt < modePoints; pt++) {
-                int arraySize = (modePoints == 1)
-                        ? minSz
-                        : minSz + (int) ((double) pt / (modePoints - 1) * (maxSz - minSz));
+                String[] modes    = {"Random", "Sorted", "Reverse Sorted"};
+                int pointsPerMode = totalPoints / modes.length;
+                int remainder     = totalPoints % modes.length;
 
-                long totalTime = 0, minTime = Long.MAX_VALUE, maxTime = Long.MIN_VALUE;
-                long totalComparisons = 0, totalInterchanges = 0;
+                // --- Generated arrays block ---
+                for (int m = 0; m < modes.length; m++) {
+                    String mode    = modes[m];
+                    int modePoints = pointsPerMode + (m < remainder ? 1 : 0);
 
-                for (int r = 0; r < runs; r++) {
-                    int[] arr = generateArray(arraySize, mode);
-                    ArrayList<visualization_element> runSteps = new ArrayList<>();
-                    runSteps.add(new visualization_element(arr, -1, -1, false));
+                    for (int pt = 0; pt < modePoints; pt++) {
+                        int arraySize = (modePoints == 1)
+                                ? minSz
+                                : minSz + (int) ((double) pt / (modePoints - 1) * (maxSz - minSz));
 
-                    sorting_strategy s = factory.getstrategy(selectedAlgorithm, true);
-                    long start   = System.nanoTime();
-                    s.sort(arr, runSteps);
-                    long elapsed = System.nanoTime() - start;
+                        long totalTime = 0, minTime = Long.MAX_VALUE, maxTime = Long.MIN_VALUE;
+                        long totalComparisons = 0, totalInterchanges = 0;
 
-                    long runComparisons = 0, runInterchanges = 0;
-                    for (int i = 1; i < runSteps.size(); i++) {
-                        if (runSteps.get(i).isCompare_or_swap()) runComparisons++;
-                        else runInterchanges++;
+                        for (int r = 0; r < runs; r++) {
+                            int[] arr = generateArray(arraySize, mode);
+                            ArrayList<visualization_element> runSteps = new ArrayList<>();
+                            runSteps.add(new visualization_element(arr, -1, -1, false));
+
+                            sorting_strategy s = factory.getstrategy(selectedAlgorithm, false);
+                            long start   = System.nanoTime();
+                            s.sort(arr, runSteps);
+                            long elapsed = System.nanoTime() - start;
+
+                            long runComparisons = 0, runInterchanges = 0;
+                            for (int i = 1; i < runSteps.size(); i++) {
+                                if (runSteps.get(i).isCompare_or_swap()) runComparisons++;
+                                else runInterchanges++;
+                            }
+
+                            totalTime         += elapsed;
+                            totalComparisons  += runComparisons;
+                            totalInterchanges += runInterchanges;
+                            if (elapsed < minTime) minTime = elapsed;
+                            if (elapsed > maxTime) maxTime = elapsed;
+                        }
+
+                        double avgMs = (totalTime / runs) / 1_000_000.0;
+                        long   minMs = minTime / 1_000_000;
+                        long   maxMs = maxTime / 1_000_000;
+
+                        results.add(new ComparisonResult(
+                                selectedAlgorithm, arraySize, mode, runs,
+                                Math.round(avgMs * 100.0) / 100.0,
+                                minMs, maxMs,
+                                totalComparisons / runs,
+                                totalInterchanges / runs
+                        ));
                     }
-
-                    totalTime         += elapsed;
-                    totalComparisons  += runComparisons;
-                    totalInterchanges += runInterchanges;
-                    if (elapsed < minTime) minTime = elapsed;
-                    if (elapsed > maxTime) maxTime = elapsed;
                 }
 
-                double avgMs = (totalTime / runs) / 1_000_000.0;
-                long   minMs = minTime / 1_000_000;
-                long   maxMs = maxTime / 1_000_000;
+                // --- Imported files block ---
+                if (importedSnapshot != null) {
+                    for (int f = 0; f < importedSnapshot.length; f++) {
+                        int[] baseArr   = importedSnapshot[f];
+                        String modeName = namesSnapshot.get(f);
 
-                results.add(new ComparisonResult(
-                        selectedAlgorithm, arraySize, mode, runs,
-                        Math.round(avgMs * 100.0) / 100.0,
-                        minMs, maxMs,
-                        totalComparisons / runs,
-                        totalInterchanges / runs
-                ));
-            }
-        }
+                        long totalTime = 0, minTime = Long.MAX_VALUE, maxTime = Long.MIN_VALUE;
+                        long totalComparisons = 0, totalInterchanges = 0;
 
-        // --- Imported files block ---
-        if (importedArrays != null) {
-            for (int f = 0; f < importedArrays.length; f++) {
-                int[] baseArr   = importedArrays[f];
-                String modeName = importedFileNames.get(f);
+                        for (int r = 0; r < runs; r++) {
+                            int[] arr = Arrays.copyOf(baseArr, baseArr.length);
+                            ArrayList<visualization_element> runSteps = new ArrayList<>();
+                            runSteps.add(new visualization_element(arr, -1, -1, false));
 
-                long totalTime = 0, minTime = Long.MAX_VALUE, maxTime = Long.MIN_VALUE;
-                long totalComparisons = 0, totalInterchanges = 0;
+                            sorting_strategy s = factory.getstrategy(selectedAlgorithm, false);
+                            long start   = System.nanoTime();
+                            s.sort(arr, runSteps);
+                            long elapsed = System.nanoTime() - start;
 
-                for (int r = 0; r < runs; r++) {
-                    int[] arr = Arrays.copyOf(baseArr, baseArr.length);
-                    ArrayList<visualization_element> runSteps = new ArrayList<>();
-                    runSteps.add(new visualization_element(arr, -1, -1, false));
+                            long runComparisons = 0, runInterchanges = 0;
+                            for (int i = 1; i < runSteps.size(); i++) {
+                                if (runSteps.get(i).isCompare_or_swap()) runComparisons++;
+                                else runInterchanges++;
+                            }
 
-                    sorting_strategy s = factory.getstrategy(selectedAlgorithm, true);
-                    long start   = System.nanoTime();
-                    s.sort(arr, runSteps);
-                    long elapsed = System.nanoTime() - start;
+                            totalTime         += elapsed;
+                            totalComparisons  += runComparisons;
+                            totalInterchanges += runInterchanges;
+                            if (elapsed < minTime) minTime = elapsed;
+                            if (elapsed > maxTime) maxTime = elapsed;
+                        }
 
-                    long runComparisons = 0, runInterchanges = 0;
-                    for (int i = 1; i < runSteps.size(); i++) {
-                        if (runSteps.get(i).isCompare_or_swap()) runComparisons++;
-                        else runInterchanges++;
+                        double avgMs = (totalTime / runs) / 1_000_000.0;
+                        long   minMs = minTime / 1_000_000;
+                        long   maxMs = maxTime / 1_000_000;
+
+                        results.add(new ComparisonResult(
+                                selectedAlgorithm, baseArr.length, modeName, runs,
+                                Math.round(avgMs * 100.0) / 100.0,
+                                minMs, maxMs,
+                                totalComparisons / runs,
+                                totalInterchanges / runs
+                        ));
                     }
-
-                    totalTime         += elapsed;
-                    totalComparisons  += runComparisons;
-                    totalInterchanges += runInterchanges;
-                    if (elapsed < minTime) minTime = elapsed;
-                    if (elapsed > maxTime) maxTime = elapsed;
                 }
 
-                double avgMs = (totalTime / runs) / 1_000_000.0;
-                long   minMs = minTime / 1_000_000;
-                long   maxMs = maxTime / 1_000_000;
-
-                results.add(new ComparisonResult(
-                        selectedAlgorithm, baseArr.length, modeName, runs,
-                        Math.round(avgMs * 100.0) / 100.0,
-                        minMs, maxMs,
-                        totalComparisons / runs,
-                        totalInterchanges / runs
-                ));
+                return results;
             }
-        }
+        };
 
-        table.setItems(results);
+        // When done, update UI and save CSV back on UI thread
+        task.setOnSucceeded(e -> {
+            javafx.collections.ObservableList<ComparisonResult> results = task.getValue();
+            table.setItems(results);
 
-        // --- Export CSV ---
-        String filename = selectedAlgorithm.replace(" ", "_") + ".csv";
-        try (PrintWriter pw = new PrintWriter(new FileWriter(filename))) {
-            pw.println("Algorithm,Array Size,Generation Mode,Runs,Avg Runtime (ms),Min Runtime (ms),Max Runtime (ms),Comparisons,Interchanges");
-            for (ComparisonResult r : results) {
-                pw.printf("%s,%d,%s,%d,%.2f,%d,%d,%d,%d%n",
-                        r.getAlgorithmName(), r.getArraySize(), r.getGenerationMode(),
-                        r.getNumberOfRuns(), r.getAverageRuntime(),
-                        r.getMinRuntime(), r.getMaxRuntime(),
-                        r.getComparisons(), r.getInterchanges());
+            String filename = selectedAlgorithm.replace(" ", "_") + ".csv";
+            try (PrintWriter pw = new PrintWriter(new FileWriter(filename))) {
+                pw.println("Algorithm,Array Size,Generation Mode,Runs,Avg Runtime (ms),Min Runtime (ms),Max Runtime (ms),Comparisons,Interchanges");
+                for (ComparisonResult r : results) {
+                    pw.printf("%s,%d,%s,%d,%.2f,%d,%d,%d,%d%n",
+                            r.getAlgorithmName(), r.getArraySize(), r.getGenerationMode(),
+                            r.getNumberOfRuns(), r.getAverageRuntime(),
+                            r.getMinRuntime(), r.getMaxRuntime(),
+                            r.getComparisons(), r.getInterchanges());
+                }
+                System.out.println("CSV saved: " + filename);
+            } catch (IOException ex) {
+                System.err.println("Failed to save CSV: " + ex.getMessage());
             }
-            System.out.println("CSV saved: " + filename);
-        } catch (IOException e) {
-            System.err.println("Failed to save CSV: " + e.getMessage());
-        }
+        });
+
+        task.setOnFailed(e -> {
+            task.getException().printStackTrace();
+            Alert alert = new Alert(Alert.AlertType.ERROR);
+            alert.setContentText("Comparison failed: " + task.getException().getMessage());
+            alert.show();
+        });
+
+        Thread thread = new Thread(task);
+        thread.setDaemon(true);
+        thread.start();
     }
 
     // Helper to generate arrays by mode
